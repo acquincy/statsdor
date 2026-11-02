@@ -1,0 +1,37 @@
+{
+  "name": "statsdor",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "ingest": "tsx src/ingestion/runner.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "lucide-react": "^1.16.0",
+    "next": "16.4.3",
+    "postgres": "^3.4.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "recharts": "^2.15.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/turbopack": "^4",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "dotenv": "^16.4.7",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.3",
+    "tailwindcss": "^4",
+    "tsx": "^4.19.3",
+    "typescript": "^5",
+    "vitest": "^3.0.7"
+  }
+}
