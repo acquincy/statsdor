@@ -46,7 +46,7 @@ export async function upsertPlayerStats(
         red: r.red,
         rating: r.rating,
         raw: sql.json(r.raw as any),
-        updated_at: sql`now()`,
+        updated_at: new Date().toISOString(),
       }))
     )}
     on conflict (player_id, team_id, league_id, season)
@@ -95,7 +95,7 @@ export async function upsertPlayerStats(
         red: r.red,
         rating: r.rating,
         raw: sql.json(r.raw as any),
-        updated_at: sql`now()`,
+        updated_at: new Date().toISOString(),
       }))
     )}
     on conflict (player_id, team_id, league_id, season, snapshot_date)

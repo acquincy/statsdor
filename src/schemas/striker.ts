@@ -94,6 +94,7 @@ export type StrikerSeasonStats = z.infer<typeof StrikerSeasonStatsSchema>;
 export type StrikerRecentGame = z.infer<typeof StrikerRecentGameSchema>;
 export type StrikerPlayerResponse = z.infer<typeof StrikerPlayerResponseSchema>;
 export type StrikerSquadItem = z.infer<typeof StrikerSquadItemSchema>;
+export type StrikerSquadResponse = z.infer<typeof StrikerSquadResponseSchema>;
 
 export interface StrikerPlayerSeasonRow {
   player_id: string;

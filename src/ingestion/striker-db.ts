@@ -61,7 +61,7 @@ export async function upsertStrikerStats(
             shots_per90: r.shots_per90,
             xg_per90: r.xg_per90,
             raw: sql.json(r.raw as any),
-            updated_at: sql`now()`,
+            updated_at: new Date().toISOString(),
           }))
         )}
         on conflict (player_id, team, league, season)
@@ -118,7 +118,7 @@ export async function upsertStrikerStats(
             shots_per90: r.shots_per90,
             xg_per90: r.xg_per90,
             raw: sql.json(r.raw as any),
-            updated_at: sql`now()`,
+            updated_at: new Date().toISOString(),
           }))
         )}
         on conflict (player_id, team, league, season, snapshot_date)
