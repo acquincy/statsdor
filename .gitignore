@@ -40,3 +40,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Python & Soccerdata
+__pycache__/
+*.py[cod]
+.soccerdata/
+.soccerdata_cache/
+
+# Data snapshots (stored in Supabase Storage and GitHub Artifacts)
+data/snapshots/*.parquet
+data/snapshots/*.csv
+data/snapshots/*.json.gz
+

@@ -21,6 +21,7 @@ export default function LeaderboardPage() {
   const [players, setPlayers] = useState<PlayerSeasonTotal[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 
   // Filters
   const [selectedSeason, setSelectedSeason] = useState<number | 'all'>(2026);
@@ -38,15 +39,39 @@ export default function LeaderboardPage() {
       setLoading(true);
       setError(null);
       try {
-        const { data, error } = await supabase
-          .from('player_season_totals')
-          .select('*')
-          .order('goals', { ascending: false });
+        const [playersRes, runRes] = await Promise.all([
+          supabase
+            .from('player_season_totals')
+            .select('*')
+            .order('goals', { ascending: false }),
+          supabase
+            .from('ingestion_runs')
+            .select('timestamp, started_at, finished_at, status')
+            .eq('status', 'complete')
+            .order('started_at', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+        ]);
 
-        if (error) {
-          setError(error.message);
-        } else if (data) {
-          setPlayers(data as PlayerSeasonTotal[]);
+        if (playersRes.error) {
+          setError(playersRes.error.message);
+        } else if (playersRes.data) {
+          setPlayers(playersRes.data as PlayerSeasonTotal[]);
+        }
+
+        if (runRes.data) {
+          const rawDate = runRes.data.finished_at || runRes.data.started_at || runRes.data.timestamp;
+          if (rawDate) {
+            const d = new Date(rawDate);
+            setLastUpdated(
+              d.toLocaleDateString(undefined, {
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            );
+          }
         }
       } catch (err: any) {
         setError(err.message || 'Failed to load leaderboard data.');
@@ -112,6 +137,12 @@ export default function LeaderboardPage() {
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold mb-3">
             <Flame className="w-3.5 h-3.5 text-emerald-400" />
             <span>Live 2026 Season Tracking</span>
+            {lastUpdated && (
+              <>
+                <span className="text-slate-600 dark:text-slate-500">•</span>
+                <span className="text-slate-300 font-normal">Updated {lastUpdated}</span>
+              </>
+            )}
           </div>
           <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white">
             Premier League Leaderboards

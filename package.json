@@ -9,7 +9,9 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "ingest": "tsx src/ingestion/striker-runner.ts",
+    "ingest": "python scripts/daily_update.py",
+    "ingest:daily": "python scripts/daily_update.py",
+    "ingest:matches": "python scripts/ingest_matches.py",
     "ingest:api-football": "tsx src/ingestion/runner.ts"
   },
   "dependencies": {

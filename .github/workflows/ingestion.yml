@@ -2,43 +2,66 @@ name: Daily Player Stats Ingestion
 
 on:
   schedule:
-    # Runs daily at 04:00 AM UTC
+    # Runs daily in the early morning at 04:00 AM UTC
     - cron: '0 4 * * *'
-  # Enables manual execution from the GitHub Actions tab
   workflow_dispatch:
     inputs:
-      limit_players:
-        description: 'Number of top players to ingest (default: 25)'
+      lookback_days:
+        description: 'Number of past days to check for recent matches (default: 3)'
         required: false
-        default: '25'
+        default: '3'
+      full_season:
+        description: 'Set to "true" to re-check all matches across the 2026-27 season'
+        required: false
+        default: 'false'
 
 jobs:
   ingest:
     name: Run Ingestion Pipeline
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      SOCCERDATA_DIR: /home/runner/soccerdata
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js 22
-        uses: actions/setup-node@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
         with:
-          node-version: 22
-          cache: 'npm'
+          python-version: '3.11'
+          cache: 'pip'
 
       - name: Install Dependencies
-        run: npm ci
-
-      - name: Run Schema Tests
-        run: npm test
-
-      - name: Run Stats Ingestion
-        env:
-          STRIKER_API_KEY: ${{ secrets.STRIKER_API_KEY }}
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
-          npm run ingest "" ${{ github.event.inputs.limit_players || '25' }}
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Cache Soccerdata Directory
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/soccerdata
+          key: soccerdata-cache-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            soccerdata-cache-${{ runner.os }}-
+
+      - name: Run ESPN Daily Ingestion
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          FLAGS="--days ${{ github.event.inputs.lookback_days || '3' }}"
+          if [ "${{ github.event.inputs.full_season }}" = "true" ]; then
+            FLAGS="$FLAGS --all"
+          fi
+          python scripts/daily_update.py $FLAGS
+
+      - name: Upload Daily Snapshots Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-snapshots
+          path: data/snapshots/
+          retention-days: 90
