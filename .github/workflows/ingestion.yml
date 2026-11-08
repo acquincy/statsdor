@@ -47,6 +47,12 @@ jobs:
           restore-keys: |
             soccerdata-cache-${{ runner.os }}-
 
+      - name: Ensure TLS Library for Linux
+        run: |
+          BIN_DIR=$(python -c "import tls_requests.models.libraries as lib, os; os.makedirs(lib.BIN_DIR, exist_ok=True); print(lib.BIN_DIR)")
+          curl -fsSL --retry 3 -o "${BIN_DIR}/tls-client-linux-ubuntu-amd64-1.13.1.so" "https://github.com/bogdanfinn/tls-client/releases/download/v1.13.1/tls-client-linux-ubuntu-amd64-1.13.1.so"
+          python -c "import soccerdata as sd; print('Soccerdata ready')"
+
       - name: Run ESPN Daily Ingestion
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
