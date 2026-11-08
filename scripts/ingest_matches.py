@@ -149,6 +149,12 @@ def main():
 
     # 4. Prepare and Upsert Player Matches
     print("\n4. Preparing match player rows...")
+    # Derive matchweek per game based on team round number
+    distinct_games = df[["league", "team", "game_id", "date"]].drop_duplicates().copy()
+    distinct_games = distinct_games.sort_values(by=["date", "game_id"])
+    distinct_games["team_match_no"] = distinct_games.groupby(["league", "team"]).cumcount() + 1
+    game_mw_map = distinct_games.groupby("game_id")["team_match_no"].max().to_dict()
+
     match_records = []
     for _, row in df.iterrows():
         pid = str(row["player_id"])
@@ -162,6 +168,7 @@ def main():
             "player_id": pid,
             "league": str(row["league"]),
             "season": 2026,  # 2026/2027 season mapped to standard 2026
+            "matchweek": int(game_mw_map.get(gid, 1)),
             "date": str(row["date"]),
             "game": str(row["game"]),
             "team": str(row["team"]),

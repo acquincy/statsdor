@@ -1,294 +1,387 @@
 'use client';
 
-import { useEffect, useState, useMemo, Suspense } from 'react';
+import React, { useEffect, useState, useMemo, Suspense, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { supabase } from '@/lib/supabase';
-import { PlayerSeasonTotal } from '@/types/database';
-import {
-  ArrowLeft,
-  GitCompare,
-  Trophy,
-  Flame,
-  Award,
-  Zap,
-} from 'lucide-react';
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-  Legend,
-} from 'recharts';
+import { fetchComparePlayers, searchAllPlayers } from '@/lib/queries';
+import { PlayerRaceSummary, PlayerSeasonTotal } from '@/types/database';
+import { CompareChart, ComparedPlayer } from '@/components/CompareChart';
+
+const COMPARE_COLORS = ['#C9A24B', '#F1EFE8', '#888780'];
 
 function CompareContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const initialP1 = searchParams.get('p1') || '';
-  const initialP2 = searchParams.get('p2') || '';
+  const urlP1 = searchParams.get('p1');
+  const urlP2 = searchParams.get('p2');
+  const urlP3 = searchParams.get('p3');
 
-  const [allPlayers, setAllPlayers] = useState<PlayerSeasonTotal[]>([]);
-  const [selectedP1, setSelectedP1] = useState<string>(initialP1);
-  const [selectedP2, setSelectedP2] = useState<string>(initialP2);
-  const [seasonFilter, setSeasonFilter] = useState<number>(2026);
+  // Default to Raphinha and Lamine Yamal
+  const [selectedIds, setSelectedIds] = useState<string[]>(() => {
+    const ids: string[] = [];
+    if (urlP1) ids.push(urlP1);
+    if (urlP2) ids.push(urlP2);
+    if (urlP3) ids.push(urlP3);
+    return ids.length > 0 ? ids : ['231050', '362150'];
+  });
+
+  const [allSearchPlayers, setAllSearchPlayers] = useState<(PlayerSeasonTotal & { teams: string })[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [summaries, setSummaries] = useState<PlayerRaceSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Scrubber & Replay state
+  const [selectedWeek, setSelectedWeek] = useState<number>(12);
+  const [maxSeasonWeek, setMaxSeasonWeek] = useState<number>(12);
+  const [isReplaying, setIsReplaying] = useState<boolean>(false);
+  const replayTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Load search list once
   useEffect(() => {
-    async function loadAll() {
+    async function loadSearchList() {
+      try {
+        const list = await searchAllPlayers();
+        setAllSearchPlayers(list);
+      } catch (err) {
+        console.error('Failed to load search list:', err);
+      }
+    }
+    loadSearchList();
+  }, []);
+
+  // Fetch summaries for selected players
+  useEffect(() => {
+    async function loadData() {
+      if (selectedIds.length === 0) return;
       setLoading(true);
       try {
-        const { data } = await supabase
-          .from('player_season_totals')
-          .select('*')
-          .order('name', { ascending: true });
+        const data = await fetchComparePlayers(selectedIds);
+        setSummaries(data);
 
-        if (data) {
-          setAllPlayers(data as PlayerSeasonTotal[]);
-
-          // If no initial params, default to first two available players
-          if (!initialP1 && data.length > 0) {
-            setSelectedP1(data[0].player_id);
-          }
-          if (!initialP2 && data.length > 1) {
-            setSelectedP2(data[1].player_id);
-          }
-        }
+        let maxW = 1;
+        data.forEach((p) => {
+          if (p.max_mw > maxW) maxW = p.max_mw;
+        });
+        setMaxSeasonWeek(maxW);
+        setSelectedWeek(maxW);
+      } catch (err) {
+        console.error('Failed to load compare data:', err);
       } finally {
         setLoading(false);
       }
     }
-    loadAll();
-  }, []);
+    loadData();
+  }, [selectedIds]);
 
-  const p1Data = useMemo(() => {
-    return allPlayers.find((p) => p.player_id === selectedP1 && p.season === seasonFilter) ||
-      allPlayers.find((p) => p.player_id === selectedP1);
-  }, [allPlayers, selectedP1, seasonFilter]);
+  // Sync URL
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (selectedIds[0]) params.set('p1', selectedIds[0]);
+    if (selectedIds[1]) params.set('p2', selectedIds[1]);
+    if (selectedIds[2]) params.set('p3', selectedIds[2]);
+    router.replace(`/compare?${params.toString()}`);
+  }, [selectedIds, router]);
 
-  const p2Data = useMemo(() => {
-    return allPlayers.find((p) => p.player_id === selectedP2 && p.season === seasonFilter) ||
-      allPlayers.find((p) => p.player_id === selectedP2);
-  }, [allPlayers, selectedP2, seasonFilter]);
+  // Handle Replay animation
+  useEffect(() => {
+    if (isReplaying) {
+      replayTimerRef.current = setInterval(() => {
+        setSelectedWeek((prev) => {
+          if (prev >= maxSeasonWeek) {
+            setIsReplaying(false);
+            if (replayTimerRef.current) clearInterval(replayTimerRef.current);
+            return maxSeasonWeek;
+          }
+          return prev + 1;
+        });
+      }, 650);
+    } else {
+      if (replayTimerRef.current) clearInterval(replayTimerRef.current);
+    }
 
-  // Unique players list for dropdowns
-  const uniquePlayers = useMemo(() => {
-    const map = new Map<string, string>();
-    allPlayers.forEach((p) => {
-      if (!map.has(p.player_id)) {
-        map.set(p.player_id, `${p.name} (${p.teams})`);
+    return () => {
+      if (replayTimerRef.current) clearInterval(replayTimerRef.current);
+    };
+  }, [isReplaying, maxSeasonWeek]);
+
+  const toggleReplay = () => {
+    if (isReplaying) {
+      setIsReplaying(false);
+    } else {
+      if (selectedWeek >= maxSeasonWeek) {
+        setSelectedWeek(1);
+      }
+      setIsReplaying(true);
+    }
+  };
+
+  // Prepare compared players at selectedWeek
+  const comparedList = useMemo(() => {
+    const list: ComparedPlayer[] = [];
+
+    selectedIds.forEach((pid, idx) => {
+      const summary = summaries.find((s) => s.player_id === pid);
+      if (!summary) return;
+
+      const relevant = summary.weekly_series.filter((pt) => pt.mw <= selectedWeek);
+      const currentPt =
+        relevant.find((pt) => pt.mw === selectedWeek) ||
+        relevant[relevant.length - 1];
+
+      const val = currentPt ? currentPt.cum_c : 0;
+      const goals = currentPt ? currentPt.cum_g : 0;
+      const assists = currentPt ? currentPt.cum_a : 0;
+
+      list.push({
+        player_id: pid,
+        name: summary.name,
+        team: summary.team,
+        league: summary.league,
+        currentValue: val,
+        goals,
+        assists,
+        isLeader: false,
+        color: COMPARE_COLORS[idx % COMPARE_COLORS.length],
+        history: relevant.map((pt) => ({
+          matchweek: pt.mw,
+          value: pt.cum_c,
+        })),
+      });
+    });
+
+    // Mark leader among compared
+    let topVal = -1;
+    let topIdx = -1;
+    list.forEach((p, idx) => {
+      if (p.currentValue > topVal) {
+        topVal = p.currentValue;
+        topIdx = idx;
       }
     });
-    return Array.from(map.entries()).map(([id, label]) => ({ id, label }));
-  }, [allPlayers]);
 
-  const comparisonMetrics = [
-    { label: 'Goals', val1: p1Data?.goals ?? 0, val2: p2Data?.goals ?? 0 },
-    { label: 'Assists', val1: p1Data?.assists ?? 0, val2: p2Data?.assists ?? 0 },
-    { label: 'Expected Goals (xG)', val1: p1Data?.xg ?? 0, val2: p2Data?.xg ?? 0 },
-    { label: 'Goals / 90', val1: p1Data?.goals_per90 ?? 0, val2: p2Data?.goals_per90 ?? 0 },
-    { label: 'xG / 90', val1: p1Data?.xg_per90 ?? 0, val2: p2Data?.xg_per90 ?? 0 },
-    { label: 'Shots', val1: p1Data?.shots ?? 0, val2: p2Data?.shots ?? 0 },
-    { label: 'Shots on Target', val1: p1Data?.shots_on_target ?? 0, val2: p2Data?.shots_on_target ?? 0 },
-    { label: 'Minutes', val1: p1Data?.minutes ?? 0, val2: p2Data?.minutes ?? 0 },
-    { label: 'Appearances', val1: p1Data?.appearances ?? 0, val2: p2Data?.appearances ?? 0 },
-  ];
+    if (topIdx >= 0) {
+      list[topIdx].isLeader = true;
+      list[topIdx].color = '#C9A24B';
+    }
 
-  const chartData = [
-    { metric: 'Goals', [p1Data?.name || 'Player 1']: p1Data?.goals || 0, [p2Data?.name || 'Player 2']: p2Data?.goals || 0 },
-    { metric: 'Assists', [p1Data?.name || 'Player 1']: p1Data?.assists || 0, [p2Data?.name || 'Player 2']: p2Data?.assists || 0 },
-    { metric: 'xG', [p1Data?.name || 'Player 1']: p1Data?.xg || 0, [p2Data?.name || 'Player 2']: p2Data?.xg || 0 },
-    { metric: 'G/90', [p1Data?.name || 'Player 1']: p1Data?.goals_per90 || 0, [p2Data?.name || 'Player 2']: p2Data?.goals_per90 || 0 },
-  ];
+    return list;
+  }, [selectedIds, summaries, selectedWeek]);
+
+  // Editorial comparison headline
+  const compareHeadline = useMemo(() => {
+    if (comparedList.length < 2) return 'Compare player trajectories';
+    const sorted = [...comparedList].sort((a, b) => b.currentValue - a.currentValue);
+    const p1 = sorted[0];
+    const p2 = sorted[1];
+    const gap = p1.currentValue - p2.currentValue;
+
+    if (gap === 0) {
+      return `${p1.name} and ${p2.name} level on ${p1.currentValue} at matchweek ${selectedWeek}`;
+    }
+    if (gap === 1) {
+      return `${p1.name} leads ${p2.name} by a single contribution`;
+    }
+    return `${p1.name} holds a ${gap}-point lead over ${p2.name} at matchweek ${selectedWeek}`;
+  }, [comparedList, selectedWeek]);
+
+  const addPlayer = (pid: string) => {
+    if (selectedIds.includes(pid)) return;
+    if (selectedIds.length >= 3) {
+      setSelectedIds([selectedIds[0], selectedIds[1], pid]);
+    } else {
+      setSelectedIds([...selectedIds, pid]);
+    }
+    setSearchQuery('');
+  };
+
+  const removePlayer = (pid: string) => {
+    if (selectedIds.length <= 1) return;
+    setSelectedIds(selectedIds.filter((id) => id !== pid));
+  };
+
+  const filteredSearch = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.toLowerCase();
+    return allSearchPlayers
+      .filter((p) => p.name.toLowerCase().includes(q) && !selectedIds.includes(p.player_id))
+      .slice(0, 6);
+  }, [allSearchPlayers, searchQuery, selectedIds]);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <Link
-          href="/"
-          className="inline-flex items-center gap-2 text-xs font-medium text-slate-400 hover:text-white transition"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          <span>Back to Leaderboards</span>
-        </Link>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400">Comparing Season:</span>
-          <select
-            value={seasonFilter}
-            onChange={(e) => setSeasonFilter(parseInt(e.target.value, 10))}
-            className="px-2.5 py-1 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
-          >
-            <option value={2026}>2026 (Current)</option>
-            <option value={2025}>2025 Season</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Selectors Bar */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Player 1 Selector */}
-        <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-2">
-          <label className="text-xs font-semibold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-400" />
-            <span>Player 1</span>
-          </label>
-          <select
-            value={selectedP1}
-            onChange={(e) => setSelectedP1(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-emerald-500 font-medium"
-          >
-            {uniquePlayers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Player 2 Selector */}
-        <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-2">
-          <label className="text-xs font-semibold uppercase tracking-wider text-teal-400 flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-teal-400" />
-            <span>Player 2</span>
-          </label>
-          <select
-            value={selectedP2}
-            onChange={(e) => setSelectedP2(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-teal-500 font-medium"
-          >
-            {uniquePlayers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {/* Side-by-Side Head-to-Head Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Player 1 Card */}
-        <div className="bg-gradient-to-br from-slate-900 to-emerald-950/20 border border-emerald-500/30 p-6 rounded-2xl shadow-lg relative">
-          <div className="flex justify-between items-start">
-            <div>
-              <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wider">
-                {p1Data?.teams || 'Team'}
-              </span>
-              <h2 className="text-2xl font-black text-white mt-0.5">{p1Data?.name || 'Player 1'}</h2>
-              <span className="text-xs text-slate-400">{p1Data?.position}</span>
-            </div>
-            <div className="text-right">
-              <span className="text-3xl font-black text-emerald-400">{p1Data?.goals ?? 0}</span>
-              <span className="block text-[10px] text-slate-400 uppercase font-semibold">Goals</span>
-            </div>
+    <div className="space-y-6 sm:space-y-8">
+      {/* Editorial Header */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-3">
+          <Link href="/" className="text-xs text-[#888780] hover:text-[#F1EFE8] font-sans">
+            ← The race
+          </Link>
+          <span className="text-[#2C2C2A]">/</span>
+          <div className="text-[11px] uppercase tracking-widest text-[#888780] font-sans">
+            Head to head · matchweek {selectedWeek}
           </div>
         </div>
 
-        {/* Player 2 Card */}
-        <div className="bg-gradient-to-br from-slate-900 to-teal-950/20 border border-teal-500/30 p-6 rounded-2xl shadow-lg relative">
-          <div className="flex justify-between items-start">
-            <div>
-              <span className="text-xs font-semibold text-teal-400 uppercase tracking-wider">
-                {p2Data?.teams || 'Team'}
-              </span>
-              <h2 className="text-2xl font-black text-white mt-0.5">{p2Data?.name || 'Player 2'}</h2>
-              <span className="text-xs text-slate-400">{p2Data?.position}</span>
-            </div>
-            <div className="text-right">
-              <span className="text-3xl font-black text-teal-400">{p2Data?.goals ?? 0}</span>
-              <span className="block text-[10px] text-slate-400 uppercase font-semibold">Goals</span>
-            </div>
-          </div>
-        </div>
+        <h1 className="font-serif text-3xl sm:text-5xl font-medium tracking-tight text-[#F1EFE8] leading-tight">
+          {compareHeadline}
+        </h1>
+        <p className="text-xs sm:text-sm text-[#B4B2A9] font-sans">
+          Cumulative goals and assists trajectories evaluated week by week.
+        </p>
       </div>
 
-      {/* Head-to-Head Metric Bars */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm space-y-4">
-        <h3 className="font-bold text-sm text-slate-200 border-b border-slate-800 pb-3 flex items-center gap-2">
-          <GitCompare className="w-4 h-4 text-emerald-400" />
-          <span>Stat Comparison ({seasonFilter} Season)</span>
-        </h3>
+      {/* Player Chips & Search Picker */}
+      <div className="flex flex-wrap items-center gap-3 pt-1">
+        {comparedList.map((p) => (
+          <div
+            key={p.player_id}
+            className="flex items-center gap-2 px-3 py-1.5 bg-[#181816] border border-[#2C2C2A] text-xs font-sans text-[#F1EFE8]"
+          >
+            <span
+              className="w-2.5 h-2.5 rounded-full"
+              style={{ backgroundColor: p.color }}
+            />
+            <span className="font-medium">{p.name}</span>
+            <span className="text-[#888780]">({p.team})</span>
+            {selectedIds.length > 1 && (
+              <button
+                onClick={() => removePlayer(p.player_id)}
+                className="text-[#888780] hover:text-[#F1EFE8] ml-1 font-mono text-sm leading-none cursor-pointer"
+              >
+                ×
+              </button>
+            )}
+          </div>
+        ))}
 
-        <div className="space-y-4 pt-1">
-          {comparisonMetrics.map((m) => {
-            const total = (Number(m.val1) || 0) + (Number(m.val2) || 0);
-            const p1Pct = total > 0 ? ((Number(m.val1) || 0) / total) * 100 : 50;
-            const p2Pct = total > 0 ? ((Number(m.val2) || 0) / total) * 100 : 50;
-            const p1Leading = Number(m.val1) > Number(m.val2);
-            const p2Leading = Number(m.val2) > Number(m.val1);
+        {selectedIds.length < 3 && (
+          <div className="relative">
+            <input
+              type="text"
+              placeholder="+ Add player..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="bg-[#141412] border border-[#2C2C2A] text-xs text-[#F1EFE8] px-3 py-1.5 placeholder-[#666663] focus:outline-none focus:border-[#C9A24B] w-40"
+            />
+            {filteredSearch.length > 0 && (
+              <div className="absolute top-full left-0 mt-1 w-64 bg-[#181816] border border-[#2C2C2A] z-20 shadow-lg divide-y divide-[#242422]">
+                {filteredSearch.map((p) => (
+                  <button
+                    key={p.player_id}
+                    onClick={() => addPlayer(p.player_id)}
+                    className="w-full text-left px-3 py-2 text-xs text-[#F1EFE8] hover:bg-[#20201D] flex items-center justify-between cursor-pointer"
+                  >
+                    <span>{p.name}</span>
+                    <span className="text-[#888780] text-[10px]">{p.teams}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
-            return (
-              <div key={m.label} className="space-y-1.5">
-                <div className="flex justify-between items-center text-xs">
+      {loading ? (
+        <div className="py-24 text-center text-[#888780] font-sans text-sm">
+          Loading comparison data...
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {/* Compare Chart */}
+          <CompareChart
+            players={comparedList}
+            selectedWeek={selectedWeek}
+            maxWeek={maxSeasonWeek}
+          />
+
+          {/* Matchweek Scrubber & Replay Bar */}
+          <div className="pt-3 border-t border-[#2C2C2A] space-y-2">
+            <div className="flex items-center justify-between text-xs text-[#888780] font-sans">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={toggleReplay}
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-[#1A1A18] hover:bg-[#222220] border border-[#2C2C2A] text-[#F1EFE8] text-[11px] font-sans transition-colors cursor-pointer"
+                >
+                  <span>{isReplaying ? '⏸' : '▶'}</span>
+                  <span>{isReplaying ? 'Pause' : 'Replay season'}</span>
+                </button>
+                <span className="hidden sm:inline">Matchweek 1</span>
+              </div>
+
+              <span className="text-[#C9A24B] font-medium">
+                Evaluating matchweek {selectedWeek} of {maxSeasonWeek}
+              </span>
+
+              <span>Matchweek {maxSeasonWeek} (Latest)</span>
+            </div>
+
+            <input
+              type="range"
+              min={1}
+              max={maxSeasonWeek}
+              value={selectedWeek}
+              onChange={(e) => {
+                setIsReplaying(false);
+                setSelectedWeek(Number(e.target.value));
+              }}
+              className="w-full"
+            />
+          </div>
+
+          {/* Big Numbers Comparison Row */}
+          <div className={`grid grid-cols-1 sm:grid-cols-${Math.min(3, comparedList.length)} gap-6 pt-5 border-t border-[#2C2C2A]`}>
+            {comparedList.map((p) => (
+              <div key={p.player_id} className="p-5 bg-[#141412] border border-[#2C2C2A] space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-serif text-xl font-medium text-[#F1EFE8]">
+                      {p.name}
+                    </h3>
+                    <div className="text-xs text-[#888780]">{p.team}</div>
+                  </div>
                   <span
-                    className={`font-mono font-bold ${
-                      p1Leading ? 'text-emerald-400 text-sm' : 'text-slate-400'
-                    }`}
-                  >
-                    {m.val1}
-                  </span>
-                  <span className="font-semibold text-slate-300 uppercase tracking-wider text-[11px]">
-                    {m.label}
-                  </span>
-                  <span
-                    className={`font-mono font-bold ${
-                      p2Leading ? 'text-teal-400 text-sm' : 'text-slate-400'
-                    }`}
-                  >
-                    {m.val2}
-                  </span>
+                    className="w-3 h-3 rounded-full"
+                    style={{ backgroundColor: p.color }}
+                  />
                 </div>
-                <div className="h-2 w-full bg-slate-950 rounded-full overflow-hidden flex">
-                  <div
-                    style={{ width: `${p1Pct}%` }}
-                    className="bg-emerald-500 transition-all duration-500"
-                  />
-                  <div
-                    style={{ width: `${p2Pct}%` }}
-                    className="bg-teal-500 transition-all duration-500"
-                  />
+
+                <div className="pt-2 border-t border-[#222220] grid grid-cols-3 gap-2 text-center">
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wider text-[#888780]">G+A</div>
+                    <div
+                      className="font-serif text-3xl font-medium mt-0.5"
+                      style={{ color: p.color }}
+                    >
+                      {p.currentValue}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wider text-[#888780]">Goals</div>
+                    <div className="font-serif text-2xl font-medium text-[#F1EFE8] mt-1">
+                      {p.goals}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wider text-[#888780]">Assists</div>
+                    <div className="font-serif text-2xl font-medium text-[#F1EFE8] mt-1">
+                      {p.assists}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-2 text-right">
+                  <Link
+                    href={`/player/${p.player_id}`}
+                    className="text-[11px] text-[#C9A24B] hover:underline font-sans"
+                  >
+                    View player dossier →
+                  </Link>
                 </div>
               </div>
-            );
-          })}
+            ))}
+          </div>
         </div>
-      </div>
-
-      {/* Visual Bar Comparison Chart */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm space-y-4">
-        <h3 className="font-bold text-sm text-slate-200">Side-by-Side Chart</h3>
-        <div className="h-64 w-full pt-2">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-              <XAxis dataKey="metric" stroke="#64748b" fontSize={12} />
-              <YAxis stroke="#64748b" fontSize={12} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#0f172a',
-                  borderColor: '#334155',
-                  borderRadius: '0.75rem',
-                  fontSize: '12px',
-                }}
-              />
-              <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
-              <Bar
-                dataKey={p1Data?.name || 'Player 1'}
-                fill="#10b981"
-                radius={[4, 4, 0, 0]}
-              />
-              <Bar
-                dataKey={p2Data?.name || 'Player 2'}
-                fill="#14b8a6"
-                radius={[4, 4, 0, 0]}
-              />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -297,7 +390,9 @@ export default function ComparePage() {
   return (
     <Suspense
       fallback={
-        <div className="p-16 text-center text-slate-400">Loading comparison...</div>
+        <div className="py-24 text-center text-[#888780] font-sans text-sm">
+          Loading comparison...
+        </div>
       }
     >
       <CompareContent />

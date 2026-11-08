@@ -1,386 +1,486 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
-import { PlayerSeasonTotal } from '@/types/database';
-import {
-  Trophy,
-  Search,
-  Filter,
-  ArrowUpDown,
-  Sparkles,
-  ChevronRight,
-  GitCompare,
-  Flame,
-} from 'lucide-react';
+import { fetchRaceSummaries } from '@/lib/queries';
+import { PlayerRaceSummary, WeeklyPoint } from '@/types/database';
+import { RaceChart, RacePlayerLine } from '@/components/RaceChart';
 
-export default function LeaderboardPage() {
+export default function RacePage() {
   const router = useRouter();
-  const [players, setPlayers] = useState<PlayerSeasonTotal[]>([]);
+
+  const [playersSummary, setPlayersSummary] = useState<PlayerRaceSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 
   // Filters
-  const [selectedSeason, setSelectedSeason] = useState<number | 'all'>(2026);
+  const [selectedLeague, setSelectedLeague] = useState<string>('all');
   const [selectedPosition, setSelectedPosition] = useState<string>('all');
-  const [searchQuery, setSearchQuery] = useState<string>('');
   const [minMinutes, setMinMinutes] = useState<number>(0);
-  const [sortBy, setSortBy] = useState<keyof PlayerSeasonTotal>('goals');
-  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
 
-  // Compare selection
-  const [compareIds, setCompareIds] = useState<string[]>([]);
+  // Scrubber & Replay state
+  const [selectedWeek, setSelectedWeek] = useState<number>(12);
+  const [isReplaying, setIsReplaying] = useState<boolean>(false);
+  const replayTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Load race data
   useEffect(() => {
-    async function fetchLeaderboard() {
+    async function loadData() {
       setLoading(true);
       setError(null);
       try {
-        const [playersRes, runRes] = await Promise.all([
-          supabase
-            .from('player_season_totals')
-            .select('*')
-            .order('goals', { ascending: false }),
-          supabase
-            .from('ingestion_runs')
-            .select('timestamp, started_at, finished_at, status')
-            .eq('status', 'complete')
-            .order('started_at', { ascending: false })
-            .limit(1)
-            .maybeSingle(),
-        ]);
+        const data = await fetchRaceSummaries({
+          league: selectedLeague,
+          position: selectedPosition,
+          minMinutes: minMinutes,
+        });
+        setPlayersSummary(data);
 
-        if (playersRes.error) {
-          setError(playersRes.error.message);
-        } else if (playersRes.data) {
-          setPlayers(playersRes.data as PlayerSeasonTotal[]);
-        }
-
-        if (runRes.data) {
-          const rawDate = runRes.data.finished_at || runRes.data.started_at || runRes.data.timestamp;
-          if (rawDate) {
-            const d = new Date(rawDate);
-            setLastUpdated(
-              d.toLocaleDateString(undefined, {
-                month: 'short',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-              })
-            );
+        // Find the latest matchweek that actually exists in this dataset
+        let maxExistingWeek = 1;
+        data.forEach((p) => {
+          if (p.max_mw > maxExistingWeek) {
+            maxExistingWeek = p.max_mw;
           }
-        }
+          p.weekly_series.forEach((pt) => {
+            if (pt.played && pt.mw > maxExistingWeek) {
+              maxExistingWeek = pt.mw;
+            }
+          });
+        });
+
+        setSelectedWeek(maxExistingWeek);
       } catch (err: any) {
-        setError(err.message || 'Failed to load leaderboard data.');
+        setError(err.message || 'Failed to load race data.');
       } finally {
         setLoading(false);
       }
     }
+    loadData();
+  }, [selectedLeague, selectedPosition, minMinutes]);
 
-    fetchLeaderboard();
-  }, []);
-
-  const filteredPlayers = useMemo(() => {
-    return players
-      .filter((p) => {
-        if (selectedSeason !== 'all' && p.season !== selectedSeason) return false;
-        if (
-          selectedPosition !== 'all' &&
-          !p.position.toLowerCase().includes(selectedPosition.toLowerCase())
-        ) {
-          return false;
-        }
-        if (minMinutes > 0 && p.minutes < minMinutes) return false;
-        if (searchQuery.trim() !== '') {
-          const q = searchQuery.toLowerCase();
-          return p.name.toLowerCase().includes(q) || p.teams.toLowerCase().includes(q);
-        }
-        return true;
-      })
-      .sort((a, b) => {
-        const valA = Number(a[sortBy]) || 0;
-        const valB = Number(b[sortBy]) || 0;
-        return sortOrder === 'desc' ? valB - valA : valA - valB;
+  // Max week in current dataset
+  const maxSeasonWeek = useMemo(() => {
+    let m = 1;
+    playersSummary.forEach((p) => {
+      if (p.max_mw > m) m = p.max_mw;
+      p.weekly_series.forEach((pt) => {
+        if (pt.played && pt.mw > m) m = pt.mw;
       });
-  }, [players, selectedSeason, selectedPosition, minMinutes, searchQuery, sortBy, sortOrder]);
+    });
+    return m;
+  }, [playersSummary]);
 
-  const handleSort = (field: keyof PlayerSeasonTotal) => {
-    if (sortBy === field) {
-      setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc');
+  // Handle Replay Season animation
+  useEffect(() => {
+    if (isReplaying) {
+      replayTimerRef.current = setInterval(() => {
+        setSelectedWeek((prev) => {
+          if (prev >= maxSeasonWeek) {
+            setIsReplaying(false);
+            if (replayTimerRef.current) clearInterval(replayTimerRef.current);
+            return maxSeasonWeek;
+          }
+          return prev + 1;
+        });
+      }, 650);
     } else {
-      setSortBy(field);
-      setSortOrder('desc');
+      if (replayTimerRef.current) {
+        clearInterval(replayTimerRef.current);
+      }
+    }
+
+    return () => {
+      if (replayTimerRef.current) {
+        clearInterval(replayTimerRef.current);
+      }
+    };
+  }, [isReplaying, maxSeasonWeek]);
+
+  const toggleReplay = () => {
+    if (isReplaying) {
+      setIsReplaying(false);
+    } else {
+      if (selectedWeek >= maxSeasonWeek) {
+        setSelectedWeek(1);
+      }
+      setIsReplaying(true);
     }
   };
 
-  const toggleCompare = (playerId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setCompareIds((prev) => {
-      if (prev.includes(playerId)) {
-        return prev.filter((id) => id !== playerId);
+  // Compute standings at selectedWeek
+  const rankedAtWeek = useMemo(() => {
+    const list: {
+      player_id: string;
+      name: string;
+      team: string;
+      league: string;
+      position: string;
+      cum_contributions: number;
+      cum_goals: number;
+      cum_assists: number;
+      cum_minutes: number;
+      matchesWithOutput: number;
+      history: { matchweek: number; value: number }[];
+    }[] = [];
+
+    playersSummary.forEach((p) => {
+      // Find point at or before selectedWeek
+      const relevantPts = p.weekly_series.filter((pt) => pt.mw <= selectedWeek);
+      if (relevantPts.length === 0) return;
+
+      const currentPt =
+        relevantPts.find((pt) => pt.mw === selectedWeek) ||
+        relevantPts[relevantPts.length - 1];
+
+      // Calculate matches with output up to selectedWeek
+      let outputCount = 0;
+      relevantPts.forEach((pt) => {
+        if (pt.played && (pt.g > 0 || pt.a > 0)) {
+          outputCount++;
+        }
+      });
+
+      // Filter by minMinutes at that point in time
+      if (minMinutes > 0 && currentPt.cum_m < minMinutes) {
+        return;
       }
-      if (prev.length >= 2) {
-        return [prev[1], playerId]; // Keep at most 2
-      }
-      return [...prev, playerId];
+
+      list.push({
+        player_id: p.player_id,
+        name: p.name,
+        team: p.team,
+        league: p.league,
+        position: p.position,
+        cum_contributions: currentPt.cum_c,
+        cum_goals: currentPt.cum_g,
+        cum_assists: currentPt.cum_a,
+        cum_minutes: currentPt.cum_m,
+        matchesWithOutput: outputCount,
+        history: relevantPts.map((pt) => ({
+          matchweek: pt.mw,
+          value: pt.cum_c,
+        })),
+      });
     });
-  };
+
+    // Rank: contributions desc, then goals desc, then fewer minutes
+    list.sort((a, b) => {
+      if (b.cum_contributions !== a.cum_contributions) {
+        return b.cum_contributions - a.cum_contributions;
+      }
+      if (b.cum_goals !== a.cum_goals) {
+        return b.cum_goals - a.cum_goals;
+      }
+      return a.cum_minutes - b.cum_minutes;
+    });
+
+    return list;
+  }, [playersSummary, selectedWeek, minMinutes]);
+
+  // Top 10 for hero chart
+  const top10Players: RacePlayerLine[] = useMemo(() => {
+    return rankedAtWeek.slice(0, 10).map((p, idx) => ({
+      player_id: p.player_id,
+      name: p.name,
+      team: p.team,
+      league: p.league,
+      history: p.history,
+      currentValue: p.cum_contributions,
+      goals: p.cum_goals,
+      assists: p.cum_assists,
+      isLeader: idx === 0,
+    }));
+  }, [rankedAtWeek]);
+
+  // Leader and gap calculation
+  const leader = rankedAtWeek[0] || null;
+  const second = rankedAtWeek[1] || null;
+  const leadGap = leader && second ? leader.cum_contributions - second.cum_contributions : 0;
+
+  // Editorial story headline
+  const editorialHeadline = useMemo(() => {
+    if (!leader) return 'The race for the European summit begins';
+    if (!second || leadGap === 0) {
+      if (second) {
+        return `${leader.name} and ${second.name} share the lead on ${leader.cum_contributions} contributions`;
+      }
+      return `${leader.name} leads the continent with ${leader.cum_contributions} contributions`;
+    }
+    if (leadGap === 1) {
+      return `${leader.name} edges one clear at the summit`;
+    }
+    if (leadGap === 2) {
+      return `${leader.name} establishes a two-goal cushion at the top`;
+    }
+    return `${leader.name} pulls ${leadGap} clear in the race for the top spot`;
+  }, [leader, second, leadGap]);
 
   return (
-    <div className="space-y-6">
-      {/* Header Banner */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-950/40 border border-slate-800 p-6 sm:p-8 shadow-xl">
-        <div className="relative z-10 max-w-2xl">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold mb-3">
-            <Flame className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Live 2026 Season Tracking</span>
-            {lastUpdated && (
-              <>
-                <span className="text-slate-600 dark:text-slate-500">•</span>
-                <span className="text-slate-300 font-normal">Updated {lastUpdated}</span>
-              </>
+    <div className="space-y-6 sm:space-y-8">
+      {/* Editorial Header - tight and clean without wasted top margin */}
+      <div className="space-y-2">
+        <div className="text-[11px] uppercase tracking-widest text-[#888780] font-sans">
+          The race · matchweek {selectedWeek}
+        </div>
+        <h1 className="font-serif text-3xl sm:text-4xl md:text-5xl font-medium tracking-tight text-[#F1EFE8] leading-tight">
+          {editorialHeadline}
+        </h1>
+        <p className="text-xs sm:text-sm text-[#B4B2A9] font-sans">
+          Cumulative goals and assists across the 2026–27 season.
+        </p>
+      </div>
+
+      {loading ? (
+        <div className="py-24 text-center text-[#888780] font-sans text-sm">
+          Loading race data...
+        </div>
+      ) : error ? (
+        <div className="p-4 bg-[#1A1A18] border border-[#2C2C2A] text-xs text-[#B4B2A9]">
+          {error}
+        </div>
+      ) : (
+        <>
+          {/* Hero Chart Container */}
+          <div className="space-y-4">
+            <RaceChart
+              players={top10Players}
+              selectedWeek={selectedWeek}
+              maxWeek={maxSeasonWeek}
+              isReplaying={isReplaying}
+              onSelectPlayer={(id) => router.push(`/player/${id}`)}
+            />
+
+            {/* Matchweek Scrubber & Replay Season Bar */}
+            <div className="pt-3 border-t border-[#2C2C2A] space-y-2">
+              <div className="flex items-center justify-between text-xs text-[#888780] font-sans">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={toggleReplay}
+                    className="flex items-center gap-1.5 px-2.5 py-1 bg-[#1A1A18] hover:bg-[#222220] border border-[#2C2C2A] text-[#F1EFE8] text-[11px] font-sans transition-colors cursor-pointer"
+                  >
+                    <span>{isReplaying ? '⏸' : '▶'}</span>
+                    <span>{isReplaying ? 'Pause' : 'Replay season'}</span>
+                  </button>
+                  <span className="hidden sm:inline">Matchweek 1</span>
+                </div>
+
+                <span className="text-[#C9A24B] font-medium">
+                  Viewing matchweek {selectedWeek} of {maxSeasonWeek}
+                </span>
+
+                <span>Matchweek {maxSeasonWeek} (Latest)</span>
+              </div>
+
+              <input
+                type="range"
+                min={1}
+                max={maxSeasonWeek}
+                value={selectedWeek}
+                onChange={(e) => {
+                  setIsReplaying(false);
+                  setSelectedWeek(Number(e.target.value));
+                }}
+                className="w-full"
+              />
+            </div>
+
+            {/* Summary Row (Three figures max) */}
+            {leader && (
+              <div className="grid grid-cols-3 gap-6 pt-5 border-t border-[#2C2C2A]">
+                <div>
+                  <div className="font-serif text-4xl sm:text-5xl font-medium text-[#C9A24B]">
+                    {leader.cum_contributions}
+                  </div>
+                  <div className="text-xs text-[#888780] mt-1 font-sans">
+                    Leader&apos;s contributions ({leader.cum_goals}G, {leader.cum_assists}A)
+                  </div>
+                </div>
+
+                <div>
+                  <div className="font-serif text-4xl sm:text-5xl font-medium text-[#F1EFE8]">
+                    {leader.matchesWithOutput}
+                  </div>
+                  <div className="text-xs text-[#888780] mt-1 font-sans">
+                    Matches with a goal or assist
+                  </div>
+                </div>
+
+                <div>
+                  <div className="font-serif text-4xl sm:text-5xl font-medium text-[#F1EFE8]">
+                    {leadGap > 0 ? `+${leadGap}` : 'Level'}
+                  </div>
+                  <div className="text-xs text-[#888780] mt-1 font-sans">
+                    Lead over second place
+                  </div>
+                </div>
+              </div>
             )}
           </div>
-          <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white">
-            Premier League Leaderboards
-          </h1>
-          <p className="mt-2 text-slate-400 text-sm sm:text-base leading-relaxed">
-            Cumulative player season totals, expected goals (xG), and per-90 rates. Click any
-            player for career history and progression charts.
-          </p>
-        </div>
-      </div>
 
-      {/* Control Bar: Filters & Search */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-slate-900/80 p-4 rounded-xl border border-slate-800">
-        {/* Search */}
-        <div className="relative">
-          <Search className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
-          <input
-            type="text"
-            placeholder="Search player or team..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition"
-          />
-        </div>
+          {/* Below the Fold: Filter Bar & Top 20 Ranked List with Sparklines */}
+          <div className="pt-8 border-t border-[#2C2C2A] space-y-5">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div>
+                <h2 className="font-serif text-2xl font-medium text-[#F1EFE8]">
+                  Standings at matchweek {selectedWeek}
+                </h2>
+                <p className="text-xs text-[#888780] mt-0.5 font-sans">
+                  Top performers ordered by total contributions at this stage of the campaign.
+                </p>
+              </div>
 
-        {/* Season Filter */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Season</span>
-          <select
-            value={selectedSeason}
-            onChange={(e) =>
-              setSelectedSeason(e.target.value === 'all' ? 'all' : parseInt(e.target.value, 10))
-            }
-            className="flex-1 px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-emerald-500 transition"
-          >
-            <option value={2026}>Current Season (2026)</option>
-            <option value={2025}>2025 Season</option>
-            <option value="all">All Seasons</option>
-          </select>
-        </div>
+              {/* Filters */}
+              <div className="flex flex-wrap items-center gap-2 text-xs font-sans">
+                <select
+                  value={selectedLeague}
+                  onChange={(e) => setSelectedLeague(e.target.value)}
+                  className="bg-[#181816] border border-[#2C2C2A] text-[#F1EFE8] px-3 py-1.5 focus:outline-none focus:border-[#C9A24B]"
+                >
+                  <option value="all">All top-5 leagues</option>
+                  <option value="ENG-Premier League">Premier League</option>
+                  <option value="ESP-La Liga">La Liga</option>
+                  <option value="GER-Bundesliga">Bundesliga</option>
+                  <option value="FRA-Ligue 1">Ligue 1</option>
+                  <option value="ITA-Serie A">Serie A</option>
+                </select>
 
-        {/* Position Filter */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Position</span>
-          <select
-            value={selectedPosition}
-            onChange={(e) => setSelectedPosition(e.target.value)}
-            className="flex-1 px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-emerald-500 transition"
-          >
-            <option value="all">All Positions</option>
-            <option value="Forward">Forwards</option>
-            <option value="Midfielder">Midfielders</option>
-            <option value="Defender">Defenders</option>
-            <option value="Goalkeeper">Goalkeepers</option>
-          </select>
-        </div>
+                <select
+                  value={selectedPosition}
+                  onChange={(e) => setSelectedPosition(e.target.value)}
+                  className="bg-[#181816] border border-[#2C2C2A] text-[#F1EFE8] px-3 py-1.5 focus:outline-none focus:border-[#C9A24B]"
+                >
+                  <option value="all">All positions</option>
+                  <option value="Forward">Forwards</option>
+                  <option value="Midfielder">Midfielders</option>
+                  <option value="Defender">Defenders</option>
+                </select>
 
-        {/* Min Minutes */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Min Mins</span>
-          <select
-            value={minMinutes}
-            onChange={(e) => setMinMinutes(parseInt(e.target.value, 10))}
-            className="flex-1 px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-emerald-500 transition"
-          >
-            <option value={0}>Any Minutes</option>
-            <option value={300}>300+ mins</option>
-            <option value={500}>500+ mins</option>
-            <option value={1000}>1000+ mins</option>
-          </select>
-        </div>
-      </div>
+                <select
+                  value={minMinutes}
+                  onChange={(e) => setMinMinutes(Number(e.target.value))}
+                  className="bg-[#181816] border border-[#2C2C2A] text-[#F1EFE8] px-3 py-1.5 focus:outline-none focus:border-[#C9A24B]"
+                >
+                  <option value={0}>No min minutes</option>
+                  <option value={270}>270+ mins</option>
+                  <option value={450}>450+ mins</option>
+                  <option value={720}>720+ mins</option>
+                </select>
+              </div>
+            </div>
 
-      {/* Main Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
-        {loading ? (
-          <div className="p-12 text-center text-slate-400 flex flex-col items-center justify-center gap-3">
-            <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-            <span className="text-sm">Loading player data from Supabase...</span>
-          </div>
-        ) : error ? (
-          <div className="p-8 text-center text-rose-400">
-            <p className="text-sm font-semibold">Error: {error}</p>
-          </div>
-        ) : filteredPlayers.length === 0 ? (
-          <div className="p-12 text-center text-slate-500">
-            <p className="text-sm">No players match the selected filters.</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-950/80 text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800">
-                <tr>
-                  <th className="py-3.5 pl-4 pr-2 w-12 text-center">Compare</th>
-                  <th className="py-3.5 px-3">#</th>
-                  <th className="py-3.5 px-4 cursor-pointer" onClick={() => handleSort('name')}>
-                    <div className="flex items-center gap-1.5 hover:text-white">
-                      <span>Player</span>
-                      <ArrowUpDown className="w-3.5 h-3.5" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3">Team</th>
-                  <th className="py-3.5 px-3">Season</th>
-                  <th className="py-3.5 px-3 cursor-pointer" onClick={() => handleSort('appearances')}>
-                    <div className="flex items-center gap-1 hover:text-white">
-                      <span>Apps</span>
-                      <ArrowUpDown className="w-3 h-3" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 cursor-pointer" onClick={() => handleSort('minutes')}>
-                    <div className="flex items-center gap-1 hover:text-white">
-                      <span>Mins</span>
-                      <ArrowUpDown className="w-3 h-3" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 cursor-pointer text-emerald-400" onClick={() => handleSort('goals')}>
-                    <div className="flex items-center gap-1 font-bold">
-                      <span>Goals</span>
-                      <ArrowUpDown className="w-3.5 h-3.5" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 cursor-pointer" onClick={() => handleSort('assists')}>
-                    <div className="flex items-center gap-1 hover:text-white">
-                      <span>Assists</span>
-                      <ArrowUpDown className="w-3 h-3" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 cursor-pointer" onClick={() => handleSort('xg')}>
-                    <div className="flex items-center gap-1 hover:text-white">
-                      <span>xG</span>
-                      <ArrowUpDown className="w-3 h-3" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 cursor-pointer" onClick={() => handleSort('goals_per90')}>
-                    <div className="flex items-center gap-1 hover:text-white">
-                      <span>G/90</span>
-                      <ArrowUpDown className="w-3 h-3" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 cursor-pointer" onClick={() => handleSort('xg_per90')}>
-                    <div className="flex items-center gap-1 hover:text-white">
-                      <span>xG/90</span>
-                      <ArrowUpDown className="w-3 h-3" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 pr-4 text-right"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60">
-                {filteredPlayers.map((player, idx) => {
-                  const isCompared = compareIds.includes(player.player_id);
-                  return (
-                    <tr
-                      key={`${player.player_id}-${player.season}`}
-                      onClick={() => router.push(`/player/${player.player_id}`)}
-                      className={`hover:bg-slate-800/40 cursor-pointer transition-colors ${
-                        isCompared ? 'bg-emerald-950/20' : ''
-                      }`}
-                    >
-                      <td className="py-3 pl-4 pr-2 text-center" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={isCompared}
-                          onChange={(e) => toggleCompare(player.player_id, e as any)}
-                          className="w-4 h-4 rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-slate-900 bg-slate-950 cursor-pointer"
-                        />
-                      </td>
-                      <td className="py-3 px-3 text-slate-500 font-mono text-xs">{idx + 1}</td>
-                      <td className="py-3 px-4 font-semibold text-slate-100 flex items-center gap-2">
-                        <span>{player.name}</span>
-                        <span className="text-[11px] font-normal text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded">
-                          {player.position}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-slate-300 font-medium">{player.teams}</td>
-                      <td className="py-3 px-3">
-                        <span
-                          className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                            player.season === 2026
-                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                              : 'bg-slate-800 text-slate-400'
+            {/* Ranked Table with Sparkline Per Player */}
+            <div className="border border-[#2C2C2A] overflow-hidden">
+              <table className="w-full text-left font-sans text-xs">
+                <thead>
+                  <tr className="border-b border-[#2C2C2A] bg-[#161614] text-[#888780] uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-4 w-10 text-center">#</th>
+                    <th className="py-3 px-4">Player</th>
+                    <th className="py-3 px-4">Club</th>
+                    <th className="py-3 px-4 w-28 text-center hidden md:table-cell">Trajectory</th>
+                    <th className="py-3 px-4 text-center">Goals</th>
+                    <th className="py-3 px-4 text-center">Assists</th>
+                    <th className="py-3 px-4 text-center font-medium text-[#F1EFE8]">G+A</th>
+                    <th className="py-3 px-4 text-right hidden sm:table-cell">Minutes</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#222220]">
+                  {rankedAtWeek.slice(0, 20).map((p, idx) => {
+                    const isLeader = idx === 0;
+
+                    // Sparkline SVG path
+                    const sparkMax = Math.max(1, p.cum_contributions);
+                    const sparkPts = p.history.map((h, i) => {
+                      const sx = p.history.length > 1 ? (i / (p.history.length - 1)) * 72 + 4 : 40;
+                      const sy = 18 - (h.value / sparkMax) * 14;
+                      return { sx, sy };
+                    });
+                    const sparkD =
+                      sparkPts.length > 1
+                        ? sparkPts.reduce((acc, pt, i) => (i === 0 ? `M ${pt.sx} ${pt.sy}` : `${acc} L ${pt.sx} ${pt.sy}`), '')
+                        : '';
+                    const lastSpark = sparkPts[sparkPts.length - 1];
+
+                    return (
+                      <tr
+                        key={p.player_id}
+                        onClick={() => router.push(`/player/${p.player_id}`)}
+                        className="hover:bg-[#181816] cursor-pointer transition-colors"
+                      >
+                        <td className="py-3 px-4 text-center text-[#888780] font-sans">
+                          {idx + 1}
+                        </td>
+                        <td className="py-3 px-4">
+                          <span
+                            className={`font-medium ${
+                              isLeader ? 'text-[#C9A24B]' : 'text-[#F1EFE8]'
+                            } hover:underline`}
+                          >
+                            {p.name}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-[#B4B2A9]">
+                          <span>{p.team}</span>
+                          <span className="text-[10px] text-[#888780] block sm:inline sm:ml-2">
+                            {p.league.replace(/^[A-Z]{3}-/, '')}
+                          </span>
+                        </td>
+
+                        {/* Sparkline column */}
+                        <td className="py-3 px-4 hidden md:table-cell text-center">
+                          <svg className="w-20 h-5 inline-block" viewBox="0 0 80 20">
+                            {sparkD && (
+                              <path
+                                d={sparkD}
+                                fill="none"
+                                stroke={isLeader ? '#C9A24B' : '#666662'}
+                                strokeWidth="1.4"
+                                strokeLinecap="round"
+                              />
+                            )}
+                            {lastSpark && (
+                              <circle
+                                cx={lastSpark.sx}
+                                cy={lastSpark.sy}
+                                r="2"
+                                fill={isLeader ? '#C9A24B' : '#888780'}
+                              />
+                            )}
+                          </svg>
+                        </td>
+
+                        <td className="py-3 px-4 text-center text-[#B4B2A9]">
+                          {p.cum_goals}
+                        </td>
+                        <td className="py-3 px-4 text-center text-[#B4B2A9]">
+                          {p.cum_assists}
+                        </td>
+                        <td
+                          className={`py-3 px-4 text-center font-serif text-sm font-medium ${
+                            isLeader ? 'text-[#C9A24B]' : 'text-[#F1EFE8]'
                           }`}
                         >
-                          {player.season}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-slate-300">{player.appearances}</td>
-                      <td className="py-3 px-3 text-slate-400 font-mono text-xs">{player.minutes}</td>
-                      <td className="py-3 px-3 font-bold text-emerald-400 text-base">
-                        {player.goals}
-                      </td>
-                      <td className="py-3 px-3 text-slate-200 font-medium">{player.assists}</td>
-                      <td className="py-3 px-3 text-teal-400 font-mono text-xs">{player.xg}</td>
-                      <td className="py-3 px-3 text-emerald-400 font-mono text-xs">
-                        {player.goals_per90}
-                      </td>
-                      <td className="py-3 px-3 text-teal-400 font-mono text-xs">
-                        {player.xg_per90}
-                      </td>
-                      <td className="py-3 pr-4 text-right">
-                        <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white transition" />
+                          {p.cum_contributions}
+                        </td>
+                        <td className="py-3 px-4 text-right text-[#888780] hidden sm:table-cell font-sans">
+                          {p.cum_minutes}′
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {rankedAtWeek.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="py-12 text-center text-[#888780]">
+                        No players match the selected filters.
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        )}
-      </div>
-
-      {/* Floating Compare Action Bar */}
-      {compareIds.length > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-900 border border-emerald-500/40 text-slate-100 px-5 py-3 rounded-full shadow-2xl flex items-center gap-4 animate-in fade-in slide-in-from-bottom-4">
-          <span className="text-xs font-medium text-emerald-400 flex items-center gap-1.5">
-            <GitCompare className="w-4 h-4" />
-            <span>{compareIds.length} player(s) selected</span>
-          </span>
-          <div className="h-4 w-px bg-slate-700" />
-          <button
-            onClick={() => {
-              if (compareIds.length === 1) {
-                router.push(`/compare?p1=${compareIds[0]}`);
-              } else {
-                router.push(`/compare?p1=${compareIds[0]}&p2=${compareIds[1]}`);
-              }
-            }}
-            className="px-4 py-1.5 rounded-full bg-emerald-500 text-slate-950 font-bold text-xs hover:bg-emerald-400 transition"
-          >
-            Compare Now
-          </button>
-          <button
-            onClick={() => setCompareIds([])}
-            className="text-xs text-slate-400 hover:text-white transition"
-          >
-            Clear
-          </button>
-        </div>
+        </>
       )}
     </div>
   );

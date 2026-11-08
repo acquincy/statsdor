@@ -15,6 +15,7 @@ export interface PlayerMatch {
   player_id: string;
   league: string;
   season: number;
+  matchweek?: number;
   date: string;
   game: string;
   team: string;
@@ -139,4 +140,56 @@ export interface IngestionRun {
   timestamp: string;
   error_message?: string | null;
 }
+
+export interface PlayerMatchweekStat {
+  player_id: string;
+  name: string;
+  team: string;
+  league: string;
+  position: string;
+  position_category: string;
+  matchweek: number;
+  mw_goals: number;
+  mw_assists: number;
+  mw_contributions: number;
+  mw_shots: number;
+  mw_minutes: number;
+  played_in_mw: boolean;
+  cum_goals: number;
+  cum_assists: number;
+  cum_contributions: number;
+  cum_shots: number;
+  cum_minutes: number;
+  cum_appearances: number;
+}
+
+export interface WeeklyPoint {
+  mw: number;
+  g: number;
+  a: number;
+  c: number;
+  cum_g: number;
+  cum_a: number;
+  cum_c: number;
+  cum_m: number;
+  played: boolean;
+}
+
+export interface PlayerRaceSummary {
+  player_id: string;
+  name: string;
+  team: string;
+  league: string;
+  position: string;
+  position_category: string;
+  total_goals: number;
+  total_assists: number;
+  total_contributions: number;
+  total_minutes: number;
+  matches_with_output: number;
+  max_mw: number;
+  weekly_series: WeeklyPoint[];
+}
+
+
 

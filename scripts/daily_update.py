@@ -499,6 +499,11 @@ def parse_match_data(
         })
 
     # 2. Derive player match logs matching player_matches table columns
+    distinct_games = df[["league", "team", "game_id", "date"]].drop_duplicates().copy()
+    distinct_games = distinct_games.sort_values(by=["date", "game_id"])
+    distinct_games["team_match_no"] = distinct_games.groupby(["league", "team"]).cumcount() + 1
+    game_mw_map = distinct_games.groupby("game_id")["team_match_no"].max().to_dict()
+
     match_records: List[Dict[str, Any]] = []
     for _, row in df.iterrows():
         pid = str(row["player_id"])
@@ -512,6 +517,7 @@ def parse_match_data(
             "player_id": pid,
             "league": str(row["league"]),
             "season": SEASON_YEAR,
+            "matchweek": int(game_mw_map.get(gid, 1)),
             "date": str(row["date"]),
             "game": str(row["game"]),
             "team": str(row["team"]),

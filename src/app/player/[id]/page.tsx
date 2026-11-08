@@ -1,266 +1,304 @@
 'use client';
 
-import { useEffect, useState, Suspense } from 'react';
+import React, { useEffect, useState, Suspense } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { supabase } from '@/lib/supabase';
-import { PlayerSeasonTotal, PlayerStatsSnapshot } from '@/types/database';
-import {
-  ArrowLeft,
-  Flame,
-  Target,
-  Zap,
-  Clock,
-  Shield,
-  Trophy,
-  GitCompare,
-  TrendingUp,
-} from 'lucide-react';
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-  Legend,
-} from 'recharts';
+import { fetchPlayerProfile } from '@/lib/queries';
+import { Player, PlayerMatch, PlayerMatchweekStat } from '@/types/database';
+import { PlayerFormStrip } from '@/components/PlayerFormStrip';
+import { PlayerCard } from '@/components/PlayerCard';
 
-function PlayerContent() {
+function PlayerProfileContent() {
   const params = useParams();
   const router = useRouter();
   const playerId = params.id as string;
 
-  const [seasons, setSeasons] = useState<PlayerSeasonTotal[]>([]);
+  const [player, setPlayer] = useState<Player | null>(null);
+  const [matches, setMatches] = useState<PlayerMatch[]>([]);
+  const [matchweeks, setMatchweeks] = useState<PlayerMatchweekStat[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    async function fetchPlayer() {
+    async function load() {
       if (!playerId) return;
       setLoading(true);
       setError(null);
       try {
-        const { data, error } = await supabase
-          .from('player_season_totals')
-          .select('*')
-          .eq('player_id', playerId)
-          .order('season', { ascending: false });
-
-        if (error) {
-          setError(error.message);
-        } else if (data) {
-          setSeasons(data as PlayerSeasonTotal[]);
-        }
+        const res = await fetchPlayerProfile(playerId);
+        setPlayer(res.player);
+        setMatches(res.matches);
+        setMatchweeks(res.matchweeks);
       } catch (err: any) {
-        setError(err.message || 'Failed to load player details.');
+        setError(err.message || 'Failed to load player profile.');
       } finally {
         setLoading(false);
       }
     }
-
-    fetchPlayer();
+    load();
   }, [playerId]);
 
   if (loading) {
     return (
-      <div className="p-16 text-center text-slate-400 flex flex-col items-center justify-center gap-3">
-        <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-        <span className="text-sm">Loading player profile...</span>
+      <div className="py-24 text-center text-[#888780] font-sans text-sm">
+        Loading player dossier...
       </div>
     );
   }
 
-  if (error || seasons.length === 0) {
+  if (error || !player) {
     return (
       <div className="space-y-4">
-        <Link href="/" className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white">
-          <ArrowLeft className="w-3.5 h-3.5" /> Back to Leaderboard
+        <Link href="/" className="text-xs text-[#888780] hover:text-[#F1EFE8] font-sans">
+          ← Back to the race
         </Link>
-        <div className="p-8 text-center bg-slate-900 border border-slate-800 rounded-xl">
-          <p className="text-rose-400 font-semibold">{error || 'Player not found.'}</p>
+        <div className="p-4 bg-[#1A1A18] border border-[#2C2C2A] text-xs text-[#B4B2A9]">
+          {error || 'Player not found.'}
         </div>
       </div>
     );
   }
 
-  const latestSeason = seasons[0];
-  const playerName = latestSeason.name;
-  const currentTeam = latestSeason.teams;
-  const position = latestSeason.position;
+  // Calculate season totals from match logs
+  const totalGoals = matches.reduce((acc, m) => acc + (m.total_goals || 0), 0);
+  const totalAssists = matches.reduce((acc, m) => acc + (m.goal_assists || 0), 0);
+  const totalContributions = totalGoals + totalAssists;
+  const totalMinutes = matches.reduce((acc, m) => acc + (m.starter ? 85 : m.sub_ins ? 25 : 0), 0);
+  const totalShots = matches.reduce((acc, m) => acc + (m.total_shots || 0), 0);
+  const totalAppearances = matches.filter((m) => m.appearances > 0 || m.starter || m.sub_ins > 0).length;
 
-  // Chart data formatted chronologically (oldest to newest)
-  const chartData = [...seasons]
-    .sort((a, b) => a.season - b.season)
-    .map((s) => ({
-      season: `${s.season}`,
-      goals: s.goals,
-      assists: s.assists,
-      xg: s.xg,
-      goals_per90: s.goals_per90,
-    }));
+  // Single-player cumulative accumulation chart math
+  const maxCumulative = Math.max(5, Math.ceil(totalContributions * 1.2));
+  const maxWeek = Math.max(1, ...matchweeks.map((m) => m.matchweek));
+
+  const chartW = 740;
+  const chartH = 220;
+  const cTop = 20;
+  const cBottom = 30;
+  const cLeft = 30;
+  const cRight = 60;
+  const cPlotW = chartW - cLeft - cRight;
+  const cPlotH = chartH - cTop - cBottom;
+
+  const getCX = (mw: number) => {
+    if (maxWeek <= 1) return cLeft + cPlotW / 2;
+    return cLeft + ((mw - 1) / (maxWeek - 1)) * cPlotW;
+  };
+
+  const getCY = (val: number) => {
+    return cTop + (1 - val / maxCumulative) * cPlotH;
+  };
+
+  const linePoints = matchweeks.map((m) => ({
+    x: getCX(m.matchweek),
+    y: getCY(m.cum_contributions),
+  }));
+
+  const linePath =
+    linePoints.length > 0
+      ? linePoints.reduce((acc, pt, i) => (i === 0 ? `M ${pt.x} ${pt.y}` : `${acc} L ${pt.x} ${pt.y}`), '')
+      : '';
+
+  const endPt = linePoints[linePoints.length - 1];
 
   return (
-    <div className="space-y-6">
-      {/* Top Navigation */}
-      <div className="flex items-center justify-between">
-        <Link
-          href="/"
-          className="inline-flex items-center gap-2 text-xs font-medium text-slate-400 hover:text-white transition"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          <span>Back to Leaderboards</span>
-        </Link>
-        <button
-          onClick={() => router.push(`/compare?p1=${playerId}`)}
-          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs font-semibold text-teal-400 hover:border-teal-500/50 transition"
-        >
-          <GitCompare className="w-3.5 h-3.5" />
-          <span>Compare this Player</span>
-        </button>
-      </div>
-
-      {/* Header Profile Card */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900 to-emerald-950/30 border border-slate-800 p-6 sm:p-8 shadow-xl">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2">
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                {currentTeam}
-              </span>
-              <span className="text-xs text-slate-400 font-medium">{position}</span>
-            </div>
-            <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white">
-              {playerName}
-            </h1>
-            <p className="text-xs text-slate-500">
-              Player ID: <span className="font-mono text-slate-400">{playerId}</span> • Premier League
-            </p>
+    <div className="space-y-12">
+      {/* Editorial Header */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-3">
+          <Link href="/" className="text-xs text-[#888780] hover:text-[#F1EFE8] font-sans">
+            ← The race
+          </Link>
+          <span className="text-[#2C2C2A]">/</span>
+          <div className="text-[11px] uppercase tracking-widest text-[#888780] font-sans">
+            Player profile · 2026–27
           </div>
+        </div>
 
-          <div className="flex items-center gap-3">
-            <div className="bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-2.5 text-center">
-              <span className="block text-2xl font-black text-emerald-400">{latestSeason.goals}</span>
-              <span className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">
-                {latestSeason.season} Goals
-              </span>
-            </div>
-            <div className="bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-2.5 text-center">
-              <span className="block text-2xl font-black text-teal-400">{latestSeason.xg}</span>
-              <span className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">
-                {latestSeason.season} xG
-              </span>
-            </div>
-          </div>
+        <h1 className="font-serif text-3xl sm:text-5xl font-medium tracking-tight text-[#F1EFE8] leading-tight">
+          {player.name}
+        </h1>
+
+        <div className="text-sm text-[#B4B2A9] font-sans flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="text-[#F1EFE8] font-medium">{player.team}</span>
+          <span className="text-[#888780]">·</span>
+          <span>{player.league}</span>
+          <span className="text-[#888780]">·</span>
+          <span>{player.position}</span>
+          {player.jersey && (
+            <>
+              <span className="text-[#888780]">·</span>
+              <span>No. {player.jersey}</span>
+            </>
+          )}
         </div>
       </div>
 
-      {/* Season Totals Cards Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 text-center">
-          <span className="block text-xl font-bold text-slate-100">{latestSeason.appearances}</span>
-          <span className="text-[11px] text-slate-400 uppercase font-medium">Appearances</span>
+      {/* Big Numbers Row */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 py-6 border-y border-[#2C2C2A]">
+        <div>
+          <div className="font-serif text-4xl sm:text-5xl font-medium text-[#C9A24B]">
+            {totalContributions}
+          </div>
+          <div className="text-xs text-[#888780] mt-1 font-sans">
+            Goals and assists
+          </div>
         </div>
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 text-center">
-          <span className="block text-xl font-bold text-slate-100">{latestSeason.minutes}</span>
-          <span className="text-[11px] text-slate-400 uppercase font-medium">Minutes</span>
+
+        <div>
+          <div className="font-serif text-4xl sm:text-5xl font-medium text-[#F1EFE8]">
+            {totalGoals}
+          </div>
+          <div className="text-xs text-[#888780] mt-1 font-sans">
+            Goals scored
+          </div>
         </div>
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 text-center">
-          <span className="block text-xl font-bold text-emerald-400">{latestSeason.goals}</span>
-          <span className="text-[11px] text-slate-400 uppercase font-medium">Goals</span>
+
+        <div>
+          <div className="font-serif text-4xl sm:text-5xl font-medium text-[#F1EFE8]">
+            {totalAssists}
+          </div>
+          <div className="text-xs text-[#888780] mt-1 font-sans">
+            Assists created
+          </div>
         </div>
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 text-center">
-          <span className="block text-xl font-bold text-slate-100">{latestSeason.assists}</span>
-          <span className="text-[11px] text-slate-400 uppercase font-medium">Assists</span>
-        </div>
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 text-center">
-          <span className="block text-xl font-bold text-emerald-400 font-mono">
-            {latestSeason.goals_per90}
-          </span>
-          <span className="text-[11px] text-slate-400 uppercase font-medium">Goals / 90</span>
-        </div>
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 text-center">
-          <span className="block text-xl font-bold text-teal-400 font-mono">
-            {latestSeason.xg_per90}
-          </span>
-          <span className="text-[11px] text-slate-400 uppercase font-medium">xG / 90</span>
+
+        <div>
+          <div className="font-serif text-4xl sm:text-5xl font-medium text-[#B4B2A9]">
+            {totalMinutes}′
+          </div>
+          <div className="text-xs text-[#888780] mt-1 font-sans">
+            Minutes across {totalAppearances} apps
+          </div>
         </div>
       </div>
 
-      {/* Multi-Season Trend Chart */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <TrendingUp className="w-4 h-4 text-emerald-400" />
-            <h2 className="font-bold text-sm text-slate-100">Season Progression Over Time</h2>
-          </div>
-          <span className="text-xs text-slate-400">Goals & Expected Goals (xG)</span>
+      {/* Form Strip Section */}
+      <div className="space-y-4">
+        <div>
+          <h2 className="font-serif text-2xl font-medium text-[#F1EFE8]">
+            Season form strip
+          </h2>
+          <p className="text-xs text-[#888780] mt-1 font-sans">
+            Chronological match logs with individual match contributions. Hover or tap for fixture box scores.
+          </p>
         </div>
 
-        <div className="h-64 w-full pt-2">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-              <XAxis dataKey="season" stroke="#64748b" fontSize={12} />
-              <YAxis stroke="#64748b" fontSize={12} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#0f172a',
-                  borderColor: '#334155',
-                  borderRadius: '0.75rem',
-                  fontSize: '12px',
-                }}
+        <PlayerFormStrip matches={matches} />
+      </div>
+
+      {/* Cumulative Trajectory Chart */}
+      <div className="space-y-4 pt-6 border-t border-[#2C2C2A]">
+        <div>
+          <h2 className="font-serif text-2xl font-medium text-[#F1EFE8]">
+            Cumulative trajectory
+          </h2>
+          <p className="text-xs text-[#888780] mt-1 font-sans">
+            Goal contributions accumulated week by week.
+          </p>
+        </div>
+
+        <div className="border border-[#2C2C2A] p-4 bg-[#141412]">
+          <svg viewBox={`0 0 ${chartW} ${chartH}`} className="w-full h-auto block">
+            {/* Horizontal gridlines */}
+            {[0, Math.round(maxCumulative / 2), maxCumulative].map((val) => {
+              const y = getCY(val);
+              return (
+                <g key={`y-${val}`}>
+                  <line
+                    x1={cLeft}
+                    y1={y}
+                    x2={cLeft + cPlotW}
+                    y2={y}
+                    stroke="#222220"
+                    strokeWidth="1"
+                  />
+                  <text
+                    x={cLeft - 6}
+                    y={y + 3}
+                    textAnchor="end"
+                    fill="#888780"
+                    fontSize="9"
+                    className="font-sans"
+                  >
+                    {val}
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* X-axis ticks */}
+            {matchweeks.map((mw) => {
+              const x = getCX(mw.matchweek);
+              return (
+                <text
+                  key={`mw-${mw.matchweek}`}
+                  x={x}
+                  y={cTop + cPlotH + 18}
+                  textAnchor="middle"
+                  fill="#888780"
+                  fontSize="10"
+                  className="font-sans"
+                >
+                  w{mw.matchweek}
+                </text>
+              );
+            })}
+
+            {/* Path */}
+            <path
+              d={linePath}
+              fill="none"
+              stroke="#C9A24B"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+
+            {/* Dots */}
+            {linePoints.map((pt, i) => (
+              <circle
+                key={`pt-${i}`}
+                cx={pt.x}
+                cy={pt.y}
+                r="3"
+                fill="#C9A24B"
               />
-              <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
-              <Bar dataKey="goals" name="Goals" fill="#10b981" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="xg" name="Expected Goals (xG)" fill="#14b8a6" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+            ))}
+
+            {/* End label */}
+            {endPt && (
+              <text
+                x={endPt.x + 8}
+                y={endPt.y + 4}
+                fill="#C9A24B"
+                fontSize="12"
+                fontWeight="500"
+                className="font-sans"
+              >
+                {totalContributions} G+A
+              </text>
+            )}
+          </svg>
         </div>
       </div>
 
-      {/* All Seasons Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
-        <div className="p-4 border-b border-slate-800 flex items-center gap-2">
-          <Trophy className="w-4 h-4 text-emerald-400" />
-          <h2 className="font-bold text-sm text-slate-100">Career Season Breakdown</h2>
+      {/* Shareable Card Section */}
+      <div className="space-y-4 pt-6 border-t border-[#2C2C2A]">
+        <div>
+          <h2 className="font-serif text-2xl font-medium text-[#F1EFE8]">
+            Player dossier card
+          </h2>
+          <p className="text-xs text-[#888780] mt-1 font-sans">
+            Editorial card layout ready for clipping or sharing.
+          </p>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-950/80 text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800">
-              <tr>
-                <th className="py-3 px-4">Season</th>
-                <th className="py-3 px-3">Team</th>
-                <th className="py-3 px-3">Apps (Starts)</th>
-                <th className="py-3 px-3">Minutes</th>
-                <th className="py-3 px-3 text-emerald-400">Goals</th>
-                <th className="py-3 px-3">Assists</th>
-                <th className="py-3 px-3">xG</th>
-                <th className="py-3 px-3">Shots</th>
-                <th className="py-3 px-3">G/90</th>
-                <th className="py-3 px-3">xG/90</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/60 font-mono text-xs">
-              {seasons.map((s) => (
-                <tr key={s.season} className="hover:bg-slate-800/30">
-                  <td className="py-3 px-4 font-bold text-slate-100">{s.season}</td>
-                  <td className="py-3 px-3 text-slate-300 font-sans">{s.teams}</td>
-                  <td className="py-3 px-3 text-slate-300">
-                    {s.appearances} ({s.starts})
-                  </td>
-                  <td className="py-3 px-3 text-slate-400">{s.minutes}</td>
-                  <td className="py-3 px-3 font-bold text-emerald-400 text-sm">{s.goals}</td>
-                  <td className="py-3 px-3 text-slate-200">{s.assists}</td>
-                  <td className="py-3 px-3 text-teal-400">{s.xg}</td>
-                  <td className="py-3 px-3 text-slate-400">{s.shots}</td>
-                  <td className="py-3 px-3 text-emerald-400">{s.goals_per90}</td>
-                  <td className="py-3 px-3 text-teal-400">{s.xg_per90}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+
+        <div className="flex justify-start">
+          <PlayerCard
+            player={player}
+            matches={matches}
+          />
         </div>
       </div>
     </div>
@@ -271,13 +309,12 @@ export default function PlayerPage() {
   return (
     <Suspense
       fallback={
-        <div className="p-16 text-center text-slate-400 flex flex-col items-center justify-center gap-3">
-          <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm">Loading player profile...</span>
+        <div className="py-24 text-center text-[#888780] font-sans text-sm">
+          Loading player dossier...
         </div>
       }
     >
-      <PlayerContent />
+      <PlayerProfileContent />
     </Suspense>
   );
 }

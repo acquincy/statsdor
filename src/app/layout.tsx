@@ -1,11 +1,26 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { Newsreader, Inter } from 'next/font/google';
 import './globals.css';
-import { Activity, BarChart3, GitCompare, Trophy } from 'lucide-react';
+
+const newsreader = Newsreader({
+  subsets: ['latin'],
+  weight: ['400', '500'],
+  style: ['normal', 'italic'],
+  variable: '--font-serif',
+  display: 'swap',
+});
+
+const inter = Inter({
+  subsets: ['latin'],
+  weight: ['400', '500'],
+  variable: '--font-sans',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
-  title: 'Statsdor | Football Player Stats & Analytics',
-  description: 'Live cumulative season totals, xG, and per-90 metrics for Premier League football players.',
+  title: 'StatsDor — The Season in Motion',
+  description: 'An editorial tracker of the best-performing footballers across the top 5 European leagues in 2026–27.',
 };
 
 export default function RootLayout({
@@ -14,59 +29,48 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark h-full antialiased">
-      <body className="min-h-full flex flex-col bg-slate-950 text-slate-100 selection:bg-emerald-500 selection:text-slate-950">
-        <header className="sticky top-0 z-50 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-            <Link href="/" className="flex items-center gap-2.5 group">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center text-slate-950 shadow-lg shadow-emerald-500/20 group-hover:scale-105 transition-transform">
-                <Activity className="w-5 h-5 font-bold stroke-[2.5]" />
-              </div>
-              <div className="flex flex-col">
-                <span className="font-bold text-lg tracking-tight bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
-                  Statsdor
-                </span>
-                <span className="text-[10px] text-emerald-400 font-medium tracking-wider uppercase -mt-1">
-                  Premier League
-                </span>
-              </div>
+    <html lang="en" className={`${newsreader.variable} ${inter.variable} h-full antialiased`}>
+      <body className="min-h-full flex flex-col bg-[#111110] text-[#F1EFE8] font-sans selection:bg-[#C9A24B] selection:text-[#111110]">
+        <header className="border-b border-[#2C2C2A] bg-[#111110]/95 sticky top-0 z-40 backdrop-blur-sm">
+          <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+            <Link href="/" className="flex items-baseline gap-3 group">
+              <span className="font-serif text-2xl tracking-tight text-[#F1EFE8] group-hover:text-[#C9A24B] transition-colors">
+                StatsDor
+              </span>
+              <span className="text-[11px] uppercase tracking-widest text-[#888780] font-sans">
+                2026–27
+              </span>
             </Link>
 
-            <nav className="flex items-center gap-1 sm:gap-2">
+            <nav className="flex items-center gap-6 text-sm font-sans">
               <Link
                 href="/"
-                className="flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium text-slate-200 hover:text-white hover:bg-slate-800/60 transition-colors"
+                className="text-[#B4B2A9] hover:text-[#F1EFE8] transition-colors"
               >
-                <Trophy className="w-4 h-4 text-emerald-400" />
-                <span>Leaderboard</span>
+                The race
               </Link>
               <Link
                 href="/compare"
-                className="flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium text-slate-200 hover:text-white hover:bg-slate-800/60 transition-colors"
+                className="text-[#B4B2A9] hover:text-[#F1EFE8] transition-colors"
               >
-                <GitCompare className="w-4 h-4 text-teal-400" />
-                <span>Compare</span>
+                Compare
               </Link>
-              <a
-                href="https://github.com/acquincy/statsdor"
-                target="_blank"
-                rel="noreferrer"
-                className="hidden sm:flex items-center gap-2 ml-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700 transition"
-              >
-                GitHub
-              </a>
             </nav>
           </div>
         </header>
 
-        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-8 sm:py-12">
           {children}
         </main>
 
-        <footer className="border-t border-slate-900 bg-slate-950/60 py-6 text-center text-xs text-slate-500">
-          <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-            <p>Statsdor • Built for football performance tracking</p>
-            <p className="text-slate-600">Seasons 2026 (Current) & 2025</p>
+        <footer className="border-t border-[#2C2C2A] py-8 mt-16 text-xs text-[#888780] font-sans">
+          <div className="max-w-5xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-baseline justify-between gap-4">
+            <div>
+              <span className="text-[#B4B2A9]">StatsDor</span> · European top-5 leagues · 2026–27 season.
+            </div>
+            <div>
+              Updated daily via ESPN match reports. All stats output-based.
+            </div>
           </div>
         </footer>
       </body>
